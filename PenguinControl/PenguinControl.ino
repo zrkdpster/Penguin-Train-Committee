@@ -4,7 +4,7 @@
 // use digital pins 6 and 5 for DCC out
 
 ///////////////////////////////////////////////////////Variables from DCCSender
-#define DEBUG false
+#define DEBUG true
 #include <SoftwareSerial.h>
 long t = 0;
 long lastmillis = 0;
@@ -31,7 +31,8 @@ boolean new_pkt = true;
 #define SEPERATOR 1
 #define SENDBYTE  2
 
-
+#define BIG_PREAMBLE 24
+#define SMALL_PREAMBLE 16
 unsigned char state= PREAMBLE;
 unsigned char preamble_count = 12;
 unsigned char outbyte = 0;
@@ -94,8 +95,7 @@ byte instrByte1;
 byte decoderType; //0=Loc, 1=Acc
 byte bufferCounter=0;
 byte isDifferentPacket=0;
-byte showLoc=1;
-byte showAcc=1;
+byte showLoc=0;
 
 
 unsigned int decoderAddress;
@@ -143,7 +143,7 @@ ISR(TIMER2_OVF_vect) {
      switch(state)  {
        case PREAMBLE:
            flag=0; // short pulse
-           if(preamble_count == 12){
+           if(preamble_count == SMALL_PREAMBLE){
              if(new_pkt){
               print_ = true;
               new_pkt = false;
@@ -171,9 +171,9 @@ ISR(TIMER2_OVF_vect) {
             print_ = false;
             state = PREAMBLE;
             if (preamable_type == 0){
-              preamble_count = 12;    // normal preamble length of 16 '1's
+              preamble_count = SMALL_PREAMBLE;    // normal preamble length of 16 '1's
             }else if (preamable_type == 1){
-              preamble_count = 24;    // preamble of 24 '1's for CV1 write
+              preamble_count = BIG_PREAMBLE;    // preamble of 24 '1's for CV1 write
             }
            }else{
             flag=0; // long pulse
@@ -236,11 +236,10 @@ void checkForPreamble() {
 }
 
 //========================
-
 void getNextByte() {
   byte newByte = 0;
   for (byte n = 0; n < 8; n++) newByte = (newByte << 1) + getBit();
-  packetBytesCount ++;  
+  packetBytesCount ++;
   dccPacket[packetBytesCount] = newByte;
   dccPacket[0] = packetBytesCount;
   if (getBit() == 1) packetEnd = true;
@@ -320,12 +319,12 @@ void setup(){
   pinMode(13, OUTPUT);   
   digitalWrite(13, HIGH); // turn bridge o/p off
   delay(500); // wait for bluetooth module to start
-  Serial.println("---");
-  Serial.println("DCC Packet Analyze started");
-  Serial.print("Updates every ");
-  Serial.print(refreshTime);
-  Serial.println(" seconds");
-  Serial.println("---");
+  //Serial.println("---");
+  //Serial.println("DCC Packet Analyze started");
+  //Serial.print("Updates every ");
+  //Serial.print(refreshTime);
+  //Serial.println(" seconds");
+  //Serial.println("---");
   beginBitDetection();
   DDRD = B01100000;   //  register D5 for digital pin 5, D6 for digital pin 6
   clear_mem();
@@ -336,19 +335,7 @@ void setup(){
 }
 
 void loop() {
-  if (Serial.available()) {
-    switch (Serial.read()) {
-      case 49: 
-        Serial.println("starting");
-        set_velocity(5, true);
-      break;
-      case 48:
-        Serial.println("stopping");
-        set_velocity(0, true);
-      break;
-    }
-  }
-    getPacket();
+  getPacket();
   byte speed;
   byte checksum = 0;
   
@@ -371,8 +358,8 @@ void loop() {
       packetBuffer[bufferCounter] = dccPacket[pktByteCount]; // add new packet to the buffer
       bufferCounter = (++bufferCounter)&(packetBufferSize-1);
       
-      if (dccPacket[1]==B11111111) { //Idle packet
-        Serial.println("Idle ");
+      if (dccPacket[1]==B11111111){ //Idle packet
+        //Serial.println("Idle ");
         return;
       }
     
@@ -396,49 +383,53 @@ void loop() {
       if (showLoc) {
         Serial.print("Loc ");
         Serial.print(decoderAddress);
-        byte instructionType = instrByte1>>5;
-        switch (instructionType) {
+      }
+    
+      byte instructionType = instrByte1>>5;
+      switch (instructionType) {
 
-          case 0:
-            Serial.print(" Control ");
-          break;
+        case 0:
+          Serial.print(" Control ");
+        break;
 
-          
-          case 1: // Advanced Operations
-            if (instrByte1==B00111111) { //128 speed steps
-              if (bitRead(dccPacket[pktByteCount-1],7)){
-                direction_ = FORWARD;
-              }
-              else{
-                direction_ = REVERSE;
-              }
-              byte speed = dccPacket[pktByteCount-1]&B01111111;
-              if (!speed){//Normal Stop
-                speed_ = 0;
-              }
-              else if (speed==1){//E-Stop
-                clear_mem();
-              }
-              else {
-                speed = speed / 4.5;
-                speed_ = speed;
-                Serial.print(speed);
-                }
+        
+        case 1: // Advanced Operations
+          if (instrByte1==B00111111) { //128 speed steps
+            if (bitRead(dccPacket[pktByteCount-1],7)){
+              direction_ = FORWARD;
             }
-            else if (instrByte1==B00111110) { //Speed Restriction
-            if (bitRead(dccPacket[pktByteCount-1],7)) Serial.print(" On ");
-              else Serial.print(" Off ");
-              Serial.print(dccPacket[pktByteCount-1])&B01111111;
+            else{
+              direction_ = REVERSE;
             }
-          break;
-        }
+            byte speed = dccPacket[pktByteCount-1]&B01111111;
+            if (speed==1){//E-Stop
+              clear_mem();
+            }
+            else {
+              speed_ = speed / 4.5;
+              set_velocity(speed_, direction_);
+            }
+          }
+          else if (instrByte1==B00111110) { //Speed Restriction
+          if (bitRead(dccPacket[pktByteCount-1],7)) Serial.print(" On ");
+            else Serial.print(" Off ");
+            Serial.print(dccPacket[pktByteCount-1])&B01111111;
+          }
+        break;
       }
     }
   }
-  set_velocity(speed_, direction_);
 }
 
 void set_velocity(byte spd, bool dir){
+  Serial.print("Speed: ");
+  Serial.println(speed_);
+  
+  if(speed_ == 0){
+    clear_mem();
+    return;
+  }
+  
   speed_ = spd;
   direction_ = dir;
   build_speed_packet();
@@ -450,7 +441,7 @@ void clear_mem(){
   msg[1].data[0] = 0;
   msg[1].data[1] = 0;
   msg[1].data[2] = (msg[1].data[0] ^ msg[1].data[1]);
-  new_pkt = true;
+  new_pkt = DEBUG;
   interrupts();
 }
 
@@ -469,6 +460,7 @@ void build_message(byte speed_){
   msg[1].len = 3;
   msg[1].data[0] = 8;
   msg[1].data[1] = speed_;
+  Serial.println(msg[1].data[1], BIN);
   msg[1].data[2] = (msg[1].data[0] ^ msg[1].data[1]);
   new_pkt = DEBUG;
   interrupts();
